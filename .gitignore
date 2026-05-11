@@ -25,13 +25,10 @@ models/
 # Environment Variables
 .env
 
-# Gemini / Agent local files
+# AI & Agent related
+.agents/
 .gemini/
-conductor/metadata.json
-conductor/tracks/
-conductor/index.md
-conductor/product.md
-conductor/tech-stack.md
-conductor/workflow.md
-conductor/product-guidelines.md
-conductor/tracks.md
+conductor/
+GEMINI.md
+skills-lock.json
+*.pen
