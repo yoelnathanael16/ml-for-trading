@@ -1,0 +1,31 @@
+[project]
+name = "ml-research"
+version = "0.1.0"
+description = "Task-oriented benchmarking of traditional machine learning models for stock market applications."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastapi",
+    "joblib",
+    "lightgbm",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "python-multipart",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "statsmodels",
+    "streamlit",
+    "uvicorn",
+    "xgboost",
+    "yfinance",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]

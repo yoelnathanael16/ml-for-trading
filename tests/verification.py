@@ -18,7 +18,7 @@ def test_pipeline_smoke():
     
     # 1. Test Ingestion
     print("\n1. Testing Data Ingestion...")
-    raw_file = fetch_stock_data(ticker, start, end)
+    raw_file = fetch_stock_data(ticker, start, end, allow_synthetic_fallback=True)
     if raw_file and os.path.exists(raw_file):
         print("PASS: Data Ingestion")
     else:

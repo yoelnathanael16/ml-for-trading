@@ -1,5 +1,6 @@
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 
@@ -7,6 +8,7 @@ env/
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
 
 # Data (Large binary or CSV files)
 data/raw/

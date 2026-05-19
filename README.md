@@ -36,43 +36,82 @@ The system identifies "best-fit" models for specific trading tasks such as portf
 
 ## Setup & Installation
 
-1. **Clone the repository** (if applicable).
-2. **Create and activate a virtual environment**:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Use either `uv` for a native Python setup or Docker for a fully containerized setup. Both work on Windows, macOS, and Linux.
+
+### Option A: Native setup with uv
+
+Install `uv` from <https://docs.astral.sh/uv/getting-started/installation/>, then run:
+
+```bash
+uv sync
+```
+
+Run commands through `uv run` so the correct virtual environment is used automatically:
+
+```bash
+uv run python tests/verification.py
+uv run python src/train_benchmark.py
+uv run uvicorn src.api.main:app --reload
+uv run streamlit run src/ui/dashboard.py
+```
+
+### Option B: Containerized setup with Docker
+
+Install Docker Desktop or Docker Engine, then run the full smoke test:
+
+```bash
+docker compose run --rm verify
+```
+
+Run the API:
+
+```bash
+docker compose up api
+```
+
+Run the dashboard:
+
+```bash
+docker compose up dashboard
+```
+
+Generated market data and trained models are written to local `data/` and `models/` folders through Docker volumes.
+
+### Option C: Classic pip setup
+
+If you prefer `pip`, create a virtual environment and install the requirements:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # Windows PowerShell: .\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
 ## Workflow & Usage
 
 ### 1. Data Ingestion & Verification
 Run the smoke test to verify your environment and fetch initial data:
 ```bash
-export PYTHONPATH=$PYTHONPATH:.
-python3 tests/verification.py
+uv run python tests/verification.py
 ```
 
 ### 2. Training & Benchmarking
 Train the models and generate the task-performance matrix for a specific ticker:
 ```bash
-python3 src/train_benchmark.py
+uv run python src/train_benchmark.py
 ```
 *Note: You can modify the ticker and date range inside the `if __name__ == "__main__":` block of the script.*
 
 ### 3. Running the API
 Start the FastAPI server for real-time analysis:
 ```bash
-uvicorn src.api.main:app --reload
+uv run uvicorn src.api.main:app --reload
 ```
 
 ### 4. Running the Dashboard
 Launch the Streamlit interface to visualize results:
 ```bash
-streamlit run src/ui/dashboard.py
+uv run streamlit run src/ui/dashboard.py
 ```
 
 ## Key Evaluation Metrics
