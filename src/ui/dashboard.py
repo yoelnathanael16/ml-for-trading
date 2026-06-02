@@ -68,15 +68,31 @@ def get_or_download_data(t, start_date="2020-01-01", end_date="2026-05-11"):
     raw_dir = "data/raw"
     os.makedirs(raw_dir, exist_ok=True)
     
+    df = None
     # Try to find existing file
     files = [f for f in os.listdir(raw_dir) if f.startswith(f"{t}_") and f.endswith(".parquet")]
     if files:
-        return pd.read_parquet(os.path.join(raw_dir, files[0]))
-        
-    # If not found, download it
-    filepath = fetch_stock_data(t, start_date, end_date, output_dir=raw_dir, allow_synthetic_fallback=True)
-    if filepath and os.path.exists(filepath):
-        return pd.read_parquet(filepath)
+        df = pd.read_parquet(os.path.join(raw_dir, files[0]))
+    else:
+        # If not found, download it
+        filepath = fetch_stock_data(t, start_date, end_date, output_dir=raw_dir, allow_synthetic_fallback=True)
+        if filepath and os.path.exists(filepath):
+            df = pd.read_parquet(filepath)
+            
+    if df is not None:
+        df = df.copy()
+        if isinstance(df.columns, pd.MultiIndex):
+            standard_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close']
+            new_cols = []
+            for col in df.columns:
+                if col[0] in standard_cols:
+                    new_cols.append(col[0])
+                elif len(col) > 1 and col[1] in standard_cols:
+                    new_cols.append(col[1])
+                else:
+                    new_cols.append(col[0])
+            df.columns = new_cols
+        return df
     return None
 
 # Load Core Data
@@ -369,7 +385,7 @@ with tab4:
                 }, index=selected_tickers)
                 
                 # Format to percentage
-                formatted_df = weights_df.applymap(lambda x: f"{x*100:.2f}%")
+                formatted_df = weights_df.map(lambda x: f"{x*100:.2f}%")
                 st.subheader("Optimal Weight Allocation Matrix")
                 st.dataframe(formatted_df)
                 
