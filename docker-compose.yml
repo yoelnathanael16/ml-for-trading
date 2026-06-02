@@ -25,8 +25,11 @@ services:
     command: streamlit run src/ui/dashboard.py --server.address 0.0.0.0 --server.port 8501
     environment:
       PYTHONPATH: /app
+      API_BASE: http://api:8000
     ports:
       - "8501:8501"
+    depends_on:
+      - api
     volumes:
       - ./data:/app/data
       - ./models:/app/models
