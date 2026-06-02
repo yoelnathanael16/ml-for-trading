@@ -14,3 +14,7 @@ pyarrow
 scipy
 joblib
 python-multipart
+hmmlearn
+arch
+shap
+apscheduler
