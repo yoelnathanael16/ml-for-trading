@@ -651,6 +651,8 @@ class QuantOrchestrator:
         # ── Tail Risk ─────────────────────────────────────────────────────
         bundle["cvar_95"] = None
         bundle["cvar_99"] = None
+        bundle["var_95"] = None
+        bundle["var_99"] = None
         bundle["position_scale"] = None
         risk_model = loaded_models.get("risk_model")
         if risk_model is not None:
@@ -658,6 +660,8 @@ class QuantOrchestrator:
                 risk_result = risk_model.compute()
                 bundle["cvar_95"] = risk_result.get("cvar_95")
                 bundle["cvar_99"] = risk_result.get("cvar_99")
+                bundle["var_95"] = risk_result.get("var_95")
+                bundle["var_99"] = risk_result.get("var_99")
                 bundle["position_scale"] = risk_result.get("position_scale")
             except Exception:
                 logger.exception("TailRiskModel compute failed for %s", ticker)
