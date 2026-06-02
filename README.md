@@ -100,6 +100,54 @@ source venv/bin/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
+## New AI Modules
+
+The following traditional ML modules have been added to expand the system's capabilities:
+
+| Module | File | Purpose |
+|---|---|---|
+| HMM Regime Detection | `src/models/regime_hmm.py` | Hidden Markov Model 3-state market regime (Bull/Sideways/Bear) |
+| GARCH Volatility | `src/models/volatility_garch.py` | GARCH(1,1) forward volatility forecast for position sizing |
+| HRP Portfolio | `src/models/portfolio_hrp.py` | Hierarchical Risk Parity allocation |
+| Anomaly Detection | `src/models/anomaly_detector.py` | Isolation Forest for unusual market conditions |
+| Mean Reversion | `src/models/mean_reversion.py` | Z-score + Ornstein-Uhlenbeck half-life analysis |
+| SHAP Explainability | `src/models/explainability.py` | Feature importance via SHAP values |
+| CVaR Risk Model | `src/models/risk_model.py` | Tail risk (Conditional Value-at-Risk) |
+| Hyperparameter Tuning | `src/training/hyperparameter_tuner.py` | Walk-forward TimeSeriesSplit + GridSearchCV |
+
+## Orchestrator & Auto-Refresh
+
+The `src/orchestrator.py` module manages the system lifecycle:
+
+- **Daily refresh** (9:30 AM ET): Fetches latest OHLCV, runs anomaly detection, updates inference cache
+- **Weekly retrain** (Monday 7:00 AM ET): Full model retrain with hyperparameter tuning + all new modules
+- **Auto-startup**: If no models found, triggers immediate training on first run
+
+## New API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/status` | GET | Scheduler state, last refresh/retrain per ticker |
+| `/regime/{ticker}` | GET | HMM + GMM regimes, transition matrix |
+| `/volatility/{ticker}` | GET | GARCH forecast vol vs rolling 20d |
+| `/portfolio` | POST | Portfolio weights (EW/RP/MVO/HRP) |
+| `/anomaly/{ticker}` | GET | Isolation Forest anomaly flag + score |
+| `/mean-reversion/{ticker}` | GET | Z-score, OU half-life, MR signal |
+| `/risk/{ticker}` | GET | CVaR 95/99, VaR 95/99, position scale |
+| `/explain/{ticker}/{model}` | GET | SHAP feature importances |
+
+## Dashboard Tabs
+
+The Streamlit dashboard now has 8 tabs:
+1. 📊 Model Benchmarks
+2. 📈 Market Regimes (GMM)
+3. ⚙️ Trading Simulator
+4. 💼 Portfolio Allocation (EW / RP / MVO / **HRP**)
+5. 🔮 Regime (HMM) — transition matrix heatmap
+6. 📉 Risk & Volatility — GARCH forecast + CVaR + anomaly
+7. 🔄 Mean Reversion — Z-score chart + OU half-life
+8. 🔍 Explainability — SHAP feature importance
+
 ## Workflow & Usage
 
 ### 1. Run Verification Test

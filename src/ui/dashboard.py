@@ -14,6 +14,26 @@ from src.models.backtester import run_advanced_backtest
 from src.models.portfolio_sizing import calculate_equal_weights, calculate_risk_parity_weights, calculate_mvo_weights
 from src.data_ingestion import fetch_stock_data
 
+API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
+
+def api_get(endpoint: str, params: dict = None) -> dict | None:
+    try:
+        r = requests.get(f"{API_BASE}{endpoint}", params=params, timeout=5)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+def api_post(endpoint: str, body: dict) -> dict | None:
+    try:
+        r = requests.post(f"{API_BASE}{endpoint}", json=body, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
 # Dark background style for matplotlib
 plt.style.use('dark_background')
 
@@ -105,12 +125,37 @@ if df_core is None:
 # Ensure indicators exist
 df_core_indicators = add_technical_indicators(df_core)
 
+# Status Banner
+status_data = api_get("/status")
+if status_data:
+    ticker_status = status_data.get(ticker, {})
+    col_s1, col_s2, col_s3 = st.columns(3)
+    with col_s1:
+        last_refresh = ticker_status.get("last_refresh") or "Never"
+        st.metric("Last Data Refresh", last_refresh)
+    with col_s2:
+        last_retrain = ticker_status.get("last_retrain") or "Never"
+        st.metric("Last Model Retrain", last_retrain)
+    with col_s3:
+        anomaly = ticker_status.get("anomaly_flag")
+        if anomaly is True:
+            st.metric("Market Status", "⚠️ ANOMALY DETECTED")
+        elif anomaly is False:
+            st.metric("Market Status", "✅ Normal")
+        else:
+            st.metric("Market Status", "—")
+    st.divider()
+
 # Setup tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Model Benchmarks", 
-    "📈 Market Regimes (GMM)", 
-    "⚙️ Trading Simulator (Entry/Exit & Sizing)", 
-    "💼 Portfolio Allocation (MVO & Risk Parity)"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "📊 Model Benchmarks",
+    "📈 Market Regimes (GMM)",
+    "⚙️ Trading Simulator",
+    "💼 Portfolio Allocation",
+    "🔮 Regime (HMM)",
+    "📉 Risk & Volatility",
+    "🔄 Mean Reversion",
+    "🔍 Explainability"
 ])
 
 # ==========================================
@@ -376,12 +421,21 @@ with tab4:
                 weights_ew = calculate_equal_weights(len(selected_tickers))
                 weights_rp = calculate_risk_parity_weights(cov_matrix)
                 weights_mvo = calculate_mvo_weights(expected_returns, cov_matrix)
-                
+
+                # HRP weights via API
+                hrp_response = api_post("/portfolio", {"tickers": selected_tickers, "method": "hrp"})
+                if hrp_response:
+                    hrp_weights_dict = hrp_response["weights"]
+                    weights_hrp = np.array([hrp_weights_dict.get(t, 0.0) for t in selected_tickers])
+                else:
+                    weights_hrp = weights_ew.copy()  # fallback
+
                 # Display Weight comparison in table
                 weights_df = pd.DataFrame({
                     "Equal Weight (EW)": weights_ew,
                     "Risk Parity (RP)": weights_rp,
-                    "Mean-Variance (MVO)": weights_mvo
+                    "Mean-Variance (MVO)": weights_mvo,
+                    "Hierarchical RP (HRP)": weights_hrp,
                 }, index=selected_tickers)
                 
                 # Format to percentage
@@ -403,7 +457,7 @@ with tab4:
                 # Portfolio expected metrics
                 st.subheader("Portfolio Expected Performance Characteristics")
                 perf_metrics = []
-                for name, w in [("Equal Weighting", weights_ew), ("Risk Parity", weights_rp), ("MVO (Max Sharpe)", weights_mvo)]:
+                for name, w in [("Equal Weighting", weights_ew), ("Risk Parity", weights_rp), ("MVO (Max Sharpe)", weights_mvo), ("HRP", weights_hrp)]:
                     port_return = np.dot(w, expected_returns)
                     port_vol = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
                     port_sharpe = port_return / port_vol if port_vol > 0 else 0.0
@@ -417,3 +471,182 @@ with tab4:
                 
     else:
         st.info("Pilih minimal 2 ticker saham untuk menghitung alokasi portofolio optimal.")
+
+# ==========================================
+# TAB 5: HMM REGIME DETECTION
+# ==========================================
+with tab5:
+    st.header("Hidden Markov Model (HMM) Market Regime Detection")
+    bundle = api_get(f"/regime/{ticker}")
+
+    if bundle:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Current Regime Comparison")
+            st.metric("GMM Regime", bundle.get("regime_gmm", "N/A"))
+            st.metric("HMM Regime", bundle.get("regime_hmm", "N/A"))
+
+        with col2:
+            st.subheader("HMM State Transition Matrix")
+            tm = bundle.get("hmm_transition_matrix")
+            if tm:
+                tm_df = pd.DataFrame(tm,
+                    index=["Bull→", "Sideways→", "Bear→"],
+                    columns=["→Bull", "→Sideways", "→Bear"])
+                fig, ax = plt.subplots(figsize=(5, 4))
+                sns.heatmap(tm_df.astype(float), annot=True, fmt=".2f", cmap="Blues",
+                           vmin=0, vmax=1, ax=ax, linewidths=0.5)
+                ax.set_title("Transition Probabilities")
+                st.pyplot(fig)
+                plt.close(fig)
+
+        st.info("""
+        **HMM Regime Detector** uses a Gaussian Hidden Markov Model with 3 states (Bull, Sideways, Bear),
+        ordered by mean log-return. The transition matrix shows the probability of moving from one regime to another.
+        """)
+    else:
+        st.warning("HMM regime data unavailable. Ensure the API is running and models are trained.")
+
+# ==========================================
+# TAB 6: RISK & VOLATILITY
+# ==========================================
+with tab6:
+    st.header("GARCH Volatility Forecast & Tail Risk (CVaR)")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Volatility Forecast")
+        vol_data = api_get(f"/volatility/{ticker}")
+        if vol_data:
+            st.metric("GARCH Forecast Vol (Annualized)", f"{vol_data.get('garch_vol', 0)*100:.2f}%")
+            st.metric("Rolling 20d Vol (Annualized)", f"{vol_data.get('rolling_vol', 0)*100:.2f}%")
+            garch = vol_data.get('garch_vol', 0)
+            roll = vol_data.get('rolling_vol', 0)
+            if garch > 0 and roll > 0:
+                if garch > roll * 1.1:
+                    st.warning("GARCH forecasts HIGHER volatility than recent history — consider reducing position size.")
+                elif garch < roll * 0.9:
+                    st.success("GARCH forecasts LOWER volatility — market may be calming.")
+        else:
+            st.warning("Volatility data unavailable.")
+
+    with col2:
+        st.subheader("Tail Risk (CVaR)")
+        risk_data = api_get(f"/risk/{ticker}")
+        if risk_data:
+            c1, c2 = st.columns(2)
+            c1.metric("CVaR 95%", f"{risk_data.get('cvar_95', 0)*100:.2f}%")
+            c2.metric("CVaR 99%", f"{risk_data.get('cvar_99', 0)*100:.2f}%")
+            c1.metric("VaR 95%", f"{risk_data.get('var_95', 0)*100:.2f}%")
+            c2.metric("VaR 99%", f"{risk_data.get('var_99', 0)*100:.2f}%")
+            scale = risk_data.get('position_scale', 1.0)
+            st.metric("CVaR Position Scale Factor", f"{scale:.2f}x",
+                     delta=f"{'Reduce' if scale < 1 else 'Increase'} size by {abs(1-scale)*100:.0f}%")
+        else:
+            st.warning("Risk data unavailable.")
+
+    # Anomaly detection info
+    st.subheader("Anomaly Detection (Isolation Forest)")
+    anomaly_data = api_get(f"/anomaly/{ticker}")
+    if anomaly_data:
+        flag = anomaly_data.get("anomaly_flag", False)
+        score = anomaly_data.get("anomaly_score", 0.0)
+        if flag:
+            st.error(f"⚠️ MARKET ANOMALY DETECTED — Score: {score:.4f}. Exercise caution.")
+        else:
+            st.success(f"✅ Market conditions appear normal — Anomaly score: {score:.4f}")
+    else:
+        st.warning("Anomaly data unavailable.")
+
+# ==========================================
+# TAB 7: MEAN REVERSION
+# ==========================================
+with tab7:
+    st.header("Mean Reversion Analysis (Z-Score & Ornstein-Uhlenbeck)")
+    mr_data = api_get(f"/mean-reversion/{ticker}")
+
+    if mr_data:
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            zscore = mr_data.get("zscore", 0)
+            # Manual z-score chart from historical data
+            if df_core_indicators is not None and 'Close' in df_core_indicators.columns:
+                prices_s = df_core_indicators['Close']
+                rolling_mean = prices_s.rolling(20).mean()
+                rolling_std = prices_s.rolling(20).std()
+                zscore_series = ((prices_s - rolling_mean) / rolling_std).dropna()
+
+                fig, ax = plt.subplots(figsize=(12, 4))
+                ax.plot(zscore_series.index, zscore_series, label='Z-Score', color='#00d2d3', linewidth=1.5)
+                ax.axhline(y=2.0, color='#e74c3c', linestyle='--', alpha=0.7, label='Entry Threshold (+2σ)')
+                ax.axhline(y=-2.0, color='#2ecc71', linestyle='--', alpha=0.7, label='Entry Threshold (-2σ)')
+                ax.axhline(y=0.5, color='#f1c40f', linestyle=':', alpha=0.5, label='Exit Threshold (+0.5σ)')
+                ax.axhline(y=-0.5, color='#f1c40f', linestyle=':', alpha=0.5, label='Exit Threshold (-0.5σ)')
+                ax.axhline(y=0, color='white', alpha=0.2)
+                ax.set_ylabel("Z-Score")
+                ax.legend(loc='upper left', fontsize=8)
+                st.pyplot(fig)
+                plt.close(fig)
+
+        with col2:
+            st.subheader("Mean Reversion Metrics")
+            halflife = mr_data.get("halflife", float('inf'))
+            is_mr = mr_data.get("is_mean_reverting", False)
+            signal = mr_data.get("mr_signal", 0)
+
+            st.metric("Current Z-Score", f"{mr_data.get('zscore', 0):.3f}")
+            if halflife == float('inf') or halflife > 252:
+                st.metric("OU Half-Life", "Non-mean-reverting")
+            else:
+                st.metric("OU Half-Life", f"{halflife:.1f} days")
+
+            signal_map = {1: "📈 Long (MR)", -1: "📉 Short (MR)", 0: "➡️ Neutral"}
+            st.metric("MR Signal", signal_map.get(signal, "Neutral"))
+
+            if is_mr:
+                st.success("✅ Mean Reverting: YES")
+            else:
+                st.warning("❌ Mean Reverting: NO (trending)")
+    else:
+        st.warning("Mean reversion data unavailable.")
+
+# ==========================================
+# TAB 8: EXPLAINABILITY (SHAP)
+# ==========================================
+with tab8:
+    st.header("Model Explainability (SHAP Feature Importance)")
+
+    model_choice = st.selectbox("Select Model to Explain", ["SVM", "RandomForest", "XGBoost", "LightGBM"])
+
+    explain_data = api_get(f"/explain/{ticker}/{model_choice}")
+
+    if explain_data:
+        importances = explain_data.get("feature_importances", {})
+        if importances:
+            feat_df = pd.DataFrame(list(importances.items()), columns=["Feature", "SHAP Importance"])
+            feat_df = feat_df.sort_values("SHAP Importance", ascending=True).tail(15)
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = ['#00d2d3' if v > 0 else '#e74c3c' for v in feat_df["SHAP Importance"]]
+            ax.barh(feat_df["Feature"], feat_df["SHAP Importance"], color=colors)
+            ax.set_xlabel("Mean |SHAP Value|")
+            ax.set_title(f"Feature Importance — {model_choice} ({ticker})")
+            st.pyplot(fig)
+            plt.close(fig)
+
+            # Top 5 table
+            st.subheader("Top 5 Most Important Features")
+            top5 = pd.DataFrame(list(importances.items()), columns=["Feature", "Mean |SHAP|"])
+            top5 = top5.nlargest(5, "Mean |SHAP|").reset_index(drop=True)
+            st.dataframe(top5)
+        else:
+            st.warning("No SHAP importance data available.")
+    else:
+        st.warning("Explainability data unavailable. Ensure API is running and models are trained.")
+
+    st.info("""
+    **SHAP (SHapley Additive exPlanations)** values show how much each feature contributes to the model's prediction.
+    Tree-based models (RF, XGB, LGBM) use TreeExplainer for fast computation. SVM uses KernelExplainer.
+    """)

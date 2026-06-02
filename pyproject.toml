@@ -5,7 +5,10 @@ description = "Task-oriented benchmarking of traditional machine learning models
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
+    "apscheduler",
+    "arch",
     "fastapi",
+    "hmmlearn",
     "joblib",
     "lightgbm",
     "matplotlib",
@@ -16,6 +19,7 @@ dependencies = [
     "scikit-learn",
     "scipy",
     "seaborn",
+    "shap",
     "statsmodels",
     "streamlit",
     "uvicorn",
