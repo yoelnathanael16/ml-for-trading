@@ -58,13 +58,27 @@ def tune_model(model_name: str, X: np.ndarray, y: np.ndarray, n_splits: int = 5)
         label_map = {label: idx for idx, label in enumerate(labels)}
         y_fit = np.vectorize(label_map.__getitem__)(y)
 
+    # TimeSeriesSplit early folds can be so small that only one class
+    # appears in the training slice (common with triple-barrier labels).
+    # SVC (and others) hard-fail on single-class input, so filter those out.
+    valid_splits = [
+        (train, test)
+        for train, test in tscv.split(X)
+        if len(np.unique(y_fit[train])) >= 2
+    ]
+    if not valid_splits:
+        raise ValueError(
+            f"No valid CV splits for {model_name}: all training folds contain fewer than 2 classes."
+        )
+
     search = GridSearchCV(
         estimator=estimator,
         param_grid=param_grid,
-        cv=tscv,
+        cv=valid_splits,
         scoring="accuracy",
         n_jobs=-1,
         refit=True,
+        error_score=0,
     )
     search.fit(X, y_fit)
     return search.best_params_
