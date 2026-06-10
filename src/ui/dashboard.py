@@ -13,6 +13,13 @@ from src.models.model_wrappers import ModelWrapper
 from src.models.backtester import run_advanced_backtest
 from src.models.portfolio_sizing import calculate_equal_weights, calculate_risk_parity_weights, calculate_mvo_weights
 from src.data_ingestion import fetch_stock_data
+from src.models.regime_hmm import HMMRegimeDetector
+from src.models.market_regime import MarketRegimeDetector
+from src.models.volatility_garch import GARCHVolatilityModel
+from src.models.risk_model import TailRiskModel
+from src.models.anomaly_detector import MarketAnomalyDetector
+from src.models.mean_reversion import MeanReversionDetector
+from src.models.explainability import ModelExplainer
 
 API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
 
@@ -114,6 +121,138 @@ def get_or_download_data(t, start_date="2020-01-01", end_date="2026-05-11"):
             df.columns = new_cols
         return df
     return None
+
+
+# ── Columns to drop when building the technical-indicator feature matrix ──────
+_OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume", "Adj Close"]
+
+
+# ── Local-compute helpers (no API required) ───────────────────────────────────
+# Each is @st.cache_data so expensive fits (GARCH, HMM, SHAP) run only once
+# per (ticker, df) pair and are retrieved instantly on subsequent reruns.
+# Every helper returns a plain dict and never raises — failures return {}.
+
+
+@st.cache_data(show_spinner=False)
+def compute_hmm_local(ticker: str, df: pd.DataFrame) -> dict:
+    """Fit HMM + GMM regimes locally from df. Returns {} on failure."""
+    try:
+        X = df[["Log_Returns", "Volatility"]].dropna().values
+        if len(X) < 30:
+            return {}
+        # HMM — always fit fresh from price data
+        det = HMMRegimeDetector()
+        det.fit(X)
+        preds = det.predict(X)
+        regime_hmm = det.get_regime_names()[int(preds[-1])]
+        tm = det.get_transition_matrix().tolist()
+        # GMM — use pre-trained artifact if available, fall back to local fit
+        regime_gmm = None
+        gmm_path = os.path.join("models", f"regime_detector_{ticker}.joblib")
+        if os.path.exists(gmm_path):
+            try:
+                gmm_det = joblib.load(gmm_path)
+                feat = df[["Log_Returns", "Volatility"]].dropna().iloc[[-1]].values
+                regime_gmm = gmm_det.predict_regime_name(feat)[0]
+            except Exception:
+                pass
+        if regime_gmm is None:
+            gmm_det_local = MarketRegimeDetector()
+            gmm_det_local.fit(X)
+            feat = df[["Log_Returns", "Volatility"]].dropna().iloc[[-1]].values
+            regime_gmm = gmm_det_local.predict_regime_name(feat)[0]
+        return {
+            "regime_gmm": regime_gmm,
+            "regime_hmm": regime_hmm,
+            "hmm_transition_matrix": tm,
+        }
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def compute_volatility_local(ticker: str, df: pd.DataFrame) -> dict:
+    """Fit GARCH and extract rolling vol locally. Returns {} on failure."""
+    try:
+        returns = df["Log_Returns"].dropna()
+        if len(returns) < 30:
+            return {}
+        m = GARCHVolatilityModel()
+        m.fit(returns)
+        garch_vol = m.forecast(horizon=1)
+        # Annualize the 20-day rolling daily std stored in the Volatility column
+        rolling_vol = float(df["Volatility"].dropna().iloc[-1]) * np.sqrt(252)
+        return {"garch_vol": garch_vol, "rolling_vol": rolling_vol}
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def compute_risk_local(ticker: str, df: pd.DataFrame) -> dict:
+    """Compute CVaR/VaR tail-risk metrics locally. Returns {} on failure."""
+    try:
+        returns = df["Log_Returns"].dropna()
+        if len(returns) < 30:
+            return {}
+        m = TailRiskModel()
+        m.fit(returns)
+        return m.compute()
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def compute_anomaly_local(ticker: str, df: pd.DataFrame) -> dict:
+    """Fit IsolationForest and score the latest row. Returns {} on failure."""
+    try:
+        feat_df = df.drop(columns=[c for c in _OHLCV_COLS if c in df.columns]).dropna()
+        if len(feat_df) < 30:
+            return {}
+        X = feat_df.values
+        det = MarketAnomalyDetector()
+        det.fit(X)
+        flag = det.is_anomaly(X[-1])
+        score = float(det.score_samples(X[-1:])[0])
+        return {"anomaly_flag": flag, "anomaly_score": score}
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def compute_mean_reversion_local(ticker: str, df: pd.DataFrame) -> dict:
+    """Run MeanReversionDetector on Close prices. Returns {} on failure."""
+    try:
+        prices = df["Close"].dropna()
+        if len(prices) < 30:
+            return {}
+        return MeanReversionDetector().predict(prices)
+    except Exception:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def compute_explain_local(ticker: str, model_choice: str, df: pd.DataFrame) -> dict:
+    """Compute SHAP importances using on-disk scaler + model. Returns {} if unavailable."""
+    try:
+        scaler_path = os.path.join("models", f"scaler_{ticker}.joblib")
+        model_path = os.path.join("models", f"{model_choice}_{ticker}.joblib")
+        if not os.path.exists(scaler_path) or not os.path.exists(model_path):
+            return {}
+        scaler = joblib.load(scaler_path)
+        raw_model = joblib.load(model_path)
+        feat_df = df.drop(columns=[c for c in _OHLCV_COLS if c in df.columns]).dropna()
+        if feat_df.empty:
+            return {}
+        # SVM KernelExplainer is expensive — cap rows to stay responsive
+        n_rows = 50 if model_choice == "SVM" else 250
+        X_scaled = scaler.transform(feat_df.values[-n_rows:])
+        feature_names = list(feat_df.columns)
+        explainer = ModelExplainer(model_choice, raw_model, feature_names)
+        importances = explainer.get_feature_importance(X_scaled)
+        return {"feature_importances": importances}
+    except Exception:
+        return {}
+
 
 # Load Core Data
 df_core = get_or_download_data(ticker)
@@ -477,7 +616,7 @@ with tab4:
 # ==========================================
 with tab5:
     st.header("Hidden Markov Model (HMM) Market Regime Detection")
-    bundle = api_get(f"/regime/{ticker}")
+    bundle = compute_hmm_local(ticker, df_core_indicators)
 
     if bundle:
         col1, col2 = st.columns(2)
@@ -505,7 +644,7 @@ with tab5:
         ordered by mean log-return. The transition matrix shows the probability of moving from one regime to another.
         """)
     else:
-        st.warning("HMM regime data unavailable. Ensure the API is running and models are trained.")
+        st.warning("HMM regime data could not be computed. Ensure sufficient price history is available.")
 
 # ==========================================
 # TAB 6: RISK & VOLATILITY
@@ -517,13 +656,13 @@ with tab6:
 
     with col1:
         st.subheader("Volatility Forecast")
-        vol_data = api_get(f"/volatility/{ticker}")
+        vol_data = compute_volatility_local(ticker, df_core_indicators)
         if vol_data:
-            st.metric("GARCH Forecast Vol (Annualized)", f"{vol_data.get('garch_vol', 0)*100:.2f}%")
-            st.metric("Rolling 20d Vol (Annualized)", f"{vol_data.get('rolling_vol', 0)*100:.2f}%")
-            garch = vol_data.get('garch_vol', 0)
-            roll = vol_data.get('rolling_vol', 0)
-            if garch > 0 and roll > 0:
+            garch = vol_data.get("garch_vol")
+            roll = vol_data.get("rolling_vol")
+            st.metric("GARCH Forecast Vol (Annualized)", f"{garch*100:.2f}%" if garch is not None else "N/A")
+            st.metric("Rolling 20d Vol (Annualized)", f"{roll*100:.2f}%" if roll is not None else "N/A")
+            if garch and roll and garch > 0 and roll > 0:
                 if garch > roll * 1.1:
                     st.warning("GARCH forecasts HIGHER volatility than recent history — consider reducing position size.")
                 elif garch < roll * 0.9:
@@ -533,22 +672,27 @@ with tab6:
 
     with col2:
         st.subheader("Tail Risk (CVaR)")
-        risk_data = api_get(f"/risk/{ticker}")
+        risk_data = compute_risk_local(ticker, df_core_indicators)
         if risk_data:
             c1, c2 = st.columns(2)
-            c1.metric("CVaR 95%", f"{risk_data.get('cvar_95', 0)*100:.2f}%")
-            c2.metric("CVaR 99%", f"{risk_data.get('cvar_99', 0)*100:.2f}%")
-            c1.metric("VaR 95%", f"{risk_data.get('var_95', 0)*100:.2f}%")
-            c2.metric("VaR 99%", f"{risk_data.get('var_99', 0)*100:.2f}%")
-            scale = risk_data.get('position_scale', 1.0)
-            st.metric("CVaR Position Scale Factor", f"{scale:.2f}x",
-                     delta=f"{'Reduce' if scale < 1 else 'Increase'} size by {abs(1-scale)*100:.0f}%")
+            cvar_95 = risk_data.get("cvar_95")
+            cvar_99 = risk_data.get("cvar_99")
+            var_95 = risk_data.get("var_95")
+            var_99 = risk_data.get("var_99")
+            scale = risk_data.get("position_scale")
+            c1.metric("CVaR 95%", f"{cvar_95*100:.2f}%" if cvar_95 is not None else "N/A")
+            c2.metric("CVaR 99%", f"{cvar_99*100:.2f}%" if cvar_99 is not None else "N/A")
+            c1.metric("VaR 95%", f"{var_95*100:.2f}%" if var_95 is not None else "N/A")
+            c2.metric("VaR 99%", f"{var_99*100:.2f}%" if var_99 is not None else "N/A")
+            if scale is not None:
+                st.metric("CVaR Position Scale Factor", f"{scale:.2f}x",
+                         delta=f"{'Reduce' if scale < 1 else 'Increase'} size by {abs(1-scale)*100:.0f}%")
         else:
             st.warning("Risk data unavailable.")
 
     # Anomaly detection info
     st.subheader("Anomaly Detection (Isolation Forest)")
-    anomaly_data = api_get(f"/anomaly/{ticker}")
+    anomaly_data = compute_anomaly_local(ticker, df_core_indicators)
     if anomaly_data:
         flag = anomaly_data.get("anomaly_flag", False)
         score = anomaly_data.get("anomaly_score", 0.0)
@@ -564,14 +708,13 @@ with tab6:
 # ==========================================
 with tab7:
     st.header("Mean Reversion Analysis (Z-Score & Ornstein-Uhlenbeck)")
-    mr_data = api_get(f"/mean-reversion/{ticker}")
+    mr_data = compute_mean_reversion_local(ticker, df_core_indicators)
 
     if mr_data:
         col1, col2 = st.columns([2, 1])
 
         with col1:
-            zscore = mr_data.get("zscore", 0)
-            # Manual z-score chart from historical data
+            # Z-score chart from historical data
             if df_core_indicators is not None and 'Close' in df_core_indicators.columns:
                 prices_s = df_core_indicators['Close']
                 rolling_mean = prices_s.rolling(20).mean()
@@ -594,10 +737,15 @@ with tab7:
             st.subheader("Mean Reversion Metrics")
             halflife = mr_data.get("halflife", float('inf'))
             is_mr = mr_data.get("is_mean_reverting", False)
-            signal = mr_data.get("mr_signal", 0)
+            signal = mr_data.get("signal", 0)  # key is "signal" in MeanReversionDetector
+            zscore_val = mr_data.get("zscore")
 
-            st.metric("Current Z-Score", f"{mr_data.get('zscore', 0):.3f}")
-            if halflife == float('inf') or halflife > 252:
+            if zscore_val is not None and not (isinstance(zscore_val, float) and np.isnan(zscore_val)):
+                st.metric("Current Z-Score", f"{zscore_val:.3f}")
+            else:
+                st.metric("Current Z-Score", "N/A")
+
+            if halflife is None or halflife == float('inf') or halflife > 252:
                 st.metric("OU Half-Life", "Non-mean-reverting")
             else:
                 st.metric("OU Half-Life", f"{halflife:.1f} days")
@@ -620,17 +768,17 @@ with tab8:
 
     model_choice = st.selectbox("Select Model to Explain", ["SVM", "RandomForest", "XGBoost", "LightGBM"])
 
-    explain_data = api_get(f"/explain/{ticker}/{model_choice}")
+    explain_data = compute_explain_local(ticker, model_choice, df_core_indicators)
 
     if explain_data:
         importances = explain_data.get("feature_importances", {})
         if importances:
-            feat_df = pd.DataFrame(list(importances.items()), columns=["Feature", "SHAP Importance"])
-            feat_df = feat_df.sort_values("SHAP Importance", ascending=True).tail(15)
+            shap_df = pd.DataFrame(list(importances.items()), columns=["Feature", "SHAP Importance"])
+            shap_df = shap_df.sort_values("SHAP Importance", ascending=True).tail(15)
 
             fig, ax = plt.subplots(figsize=(10, 6))
-            colors = ['#00d2d3' if v > 0 else '#e74c3c' for v in feat_df["SHAP Importance"]]
-            ax.barh(feat_df["Feature"], feat_df["SHAP Importance"], color=colors)
+            colors = ['#00d2d3' if v > 0 else '#e74c3c' for v in shap_df["SHAP Importance"]]
+            ax.barh(shap_df["Feature"], shap_df["SHAP Importance"], color=colors)
             ax.set_xlabel("Mean |SHAP Value|")
             ax.set_title(f"Feature Importance — {model_choice} ({ticker})")
             st.pyplot(fig)
@@ -644,7 +792,15 @@ with tab8:
         else:
             st.warning("No SHAP importance data available.")
     else:
-        st.warning("Explainability data unavailable. Ensure API is running and models are trained.")
+        _scaler_path = os.path.join("models", f"scaler_{ticker}.joblib")
+        _model_path = os.path.join("models", f"{model_choice}_{ticker}.joblib")
+        if not os.path.exists(_scaler_path) or not os.path.exists(_model_path):
+            st.info(
+                f"📋 Model artifacts for **{model_choice} / {ticker}** are not yet trained. "
+                "SHAP explainability will be available automatically once training completes."
+            )
+        else:
+            st.warning("SHAP computation failed. Check that the model and scaler are valid.")
 
     st.info("""
     **SHAP (SHapley Additive exPlanations)** values show how much each feature contributes to the model's prediction.

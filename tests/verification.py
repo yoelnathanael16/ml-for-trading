@@ -227,8 +227,8 @@ def test_pipeline_smoke():
     df_feat_ht['Label'] = 0
     X_ht, y_ht, _ = prepare_features_and_labels(df_feat_ht)
     X_ht_small = X_ht.values[:100]
-    y_ht_small = y_ht.values[:100]
-    y_ht_small[:] = 1
+    # Round-robin labels so every CV fold has ≥ 2 classes
+    y_ht_small = np.tile(np.array([-1, 0, 1]), len(X_ht_small) // 3 + 1)[:len(X_ht_small)]
     try:
         best_params = tune_model("SVM", X_ht_small, y_ht_small, n_splits=2)
         if isinstance(best_params, dict) and "C" in best_params:
