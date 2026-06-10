@@ -34,3 +34,6 @@ conductor/
 GEMINI.md
 skills-lock.json
 *.pen
+
+# Generated static site data (produced by scripts/export_static.py at build time)
+docs/data/

@@ -1,5 +1,14 @@
 # Task-Oriented Benchmarking of Traditional ML Models in Stock Market Applications
 
+## 🌐 Live Demo (GitHub Pages)
+
+**[https://will702.github.io/ml-for-trading/](https://will702.github.io/ml-for-trading/)**
+
+A read-only static snapshot of the 8-tab dashboard, rebuilt automatically on every push to `main`.
+Charts and tables are pre-rendered from models trained in CI — no backend required to view.
+> ℹ️ The Trading Simulator and Portfolio tabs show build-time snapshots with default parameters.
+> For live interactive control, run the full app locally (see *Running Locally* below).
+
 ## Project Overview
 This project benchmarks traditional Machine Learning models (ARIMA, SVM, Gradient Boosting, Random Forest) within the stock market domain. The primary goal is to bridge the gap between statistical precision (MAE, RMSE, Accuracy) and practical financial performance (Sharpe Ratio, Max Drawdown).
 
@@ -9,6 +18,9 @@ With the latest features, the system implements advanced trading tasks: **Market
 - Gregorius Willson — 2802449846
 - Marco Oden Leo — 2802429453
 - Yoel Nathanael — 2802445766
+
+## Pipeline Diagram
+See [`docs/pipeline.md`](docs/pipeline.md) for an end-to-end Mermaid flowchart of the full data → preprocessing → modelling → output pipeline.
 
 ## Core Features
 - **Automated Data Ingestion**: Historical OHLCV data fetching via `yfinance` stored in Parquet format. Supports fallback synthetic data.
