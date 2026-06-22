@@ -1,9 +1,17 @@
+import sys
+import os
+
+# Ensure repo root is in sys.path so both `src.*` and `scripts.*` resolve
+# regardless of which directory Streamlit Cloud picks as cwd.
+_repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-import os
 import io
 import re
 import base64
@@ -33,14 +41,14 @@ from src.models.risk_model import TailRiskModel
 from src.models.anomaly_detector import MarketAnomalyDetector
 from src.models.mean_reversion import MeanReversionDetector
 from src.models.explainability import ModelExplainer
-from scripts.eda_preprocessing import (
-    plot_raw_ohlcv,
-    plot_technical_indicators,
-    plot_labeling,
-    plot_feature_distributions,
-    plot_scaling_impact,
-    plot_train_test_split,
-)
+# ponytail: lazy import — keeps app loading even if scripts/ path is unusual
+def _load_eda_fns():
+    from scripts.eda_preprocessing import (
+        plot_raw_ohlcv, plot_technical_indicators, plot_labeling,
+        plot_feature_distributions, plot_scaling_impact, plot_train_test_split,
+    )
+    return (plot_raw_ohlcv, plot_technical_indicators, plot_labeling,
+            plot_feature_distributions, plot_scaling_impact, plot_train_test_split)
 
 API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
 
@@ -875,6 +883,10 @@ with tab10:
     if generate_btn:
         with st.spinner("Running preprocessing pipeline and building visualizations..."):
             try:
+                (plot_raw_ohlcv, plot_technical_indicators, plot_labeling,
+                 plot_feature_distributions, plot_scaling_impact,
+                 plot_train_test_split) = _load_eda_fns()
+
                 df_raw_eda = get_or_download_data(ticker)
                 df_eda = add_technical_indicators(df_raw_eda.copy())
                 df_eda["Label"] = triple_barrier_labeling(df_eda)
