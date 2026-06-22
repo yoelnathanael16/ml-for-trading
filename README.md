@@ -1,13 +1,16 @@
 # Task-Oriented Benchmarking of Traditional ML Models in Stock Market Applications
 
-## Live Demo (GitHub Pages)
+## Live Demo (Streamlit Community Cloud)
 
-**[https://will702.github.io/ml-for-trading/](https://will702.github.io/ml-for-trading/)**
+Deploy the dynamic 10-tab dashboard to [Streamlit Community Cloud](https://share.streamlit.io):
 
-A read-only static snapshot of the 8-tab dashboard, rebuilt automatically on every push to `main`.
-Charts and tables are pre-rendered from models trained in CI — no backend required to view.
-> The Trading Simulator and Portfolio tabs show build-time snapshots with default parameters.
-> For live interactive control, run the full app locally (see *Running Locally* below).
+1. Fork / push this repo to GitHub.
+2. Go to **share.streamlit.io → New app**.
+3. Set **Main file path** to `src/ui/dashboard.py`.
+4. Click **Deploy** — `packages.txt` installs system deps automatically.
+
+All charts compute live from yfinance on demand. Heavy compute (Model Benchmarks / SHAP) is
+gated behind an explicit button so the app loads instantly on cold start.
 
 ---
 

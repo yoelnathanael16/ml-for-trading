@@ -83,8 +83,9 @@ def plot_raw_ohlcv(df_raw, out_dir):
         for ax in axes:
             ax.set_xlabel("")
         plt.tight_layout()
-        _save(fig, out_dir, "01_raw_ohlcv.png")
-        plt.close(fig)
+        if out_dir is not None:
+            _save(fig, out_dir, "01_raw_ohlcv.png")
+        return fig
 
 
 # ─── Figure 2: Technical indicators ──────────────────────────────────────────
@@ -163,8 +164,9 @@ def plot_technical_indicators(df, out_dir):
         lines2, labels2 = ax5_twin.get_legend_handles_labels()
         ax5.legend(lines1 + lines2, labels1 + labels2, fontsize=7)
 
-        _save(fig, out_dir, "02_technical_indicators.png")
-        plt.close(fig)
+        if out_dir is not None:
+            _save(fig, out_dir, "02_technical_indicators.png")
+        return fig
 
 
 # ─── Figure 3: Triple-barrier labeling ───────────────────────────────────────
@@ -202,8 +204,9 @@ def plot_labeling(df, out_dir):
         ax_bar.tick_params(axis="x", labelsize=7)
 
         plt.tight_layout()
-        _save(fig, out_dir, "03_triple_barrier_labels.png")
-        plt.close(fig)
+        if out_dir is not None:
+            _save(fig, out_dir, "03_triple_barrier_labels.png")
+        return fig
 
 
 # ─── Figure 4: Feature correlations & distributions (pre-scale) ──────────────
@@ -223,8 +226,8 @@ def plot_feature_distributions(X_raw, out_dir):
         ax_corr.set_title("Stage 4 · Feature Correlation Matrix (pre-scaling)",
                           fontsize=13, fontweight="bold")
         plt.tight_layout()
-        _save(fig_corr, out_dir, "04a_feature_correlations.png")
-        plt.close(fig_corr)
+        if out_dir is not None:
+            _save(fig_corr, out_dir, "04a_feature_correlations.png")
 
         # 4b: individual histograms
         ncols = 4
@@ -244,8 +247,9 @@ def plot_feature_distributions(X_raw, out_dir):
         for j in range(i + 1, len(axes.flat)):
             axes.flat[j].set_visible(False)
         plt.tight_layout()
-        _save(fig_hist, out_dir, "04b_feature_distributions.png")
-        plt.close(fig_hist)
+        if out_dir is not None:
+            _save(fig_hist, out_dir, "04b_feature_distributions.png")
+        return fig_corr, fig_hist
 
 
 # ─── Figure 5: Scaling impact (before vs after RobustScaler) ─────────────────
@@ -274,8 +278,9 @@ def plot_scaling_impact(X_raw, X_scaled, out_dir):
                 stats = f"μ={data.mean():.3g}  σ={data.std():.3g}"
                 ax.set_xlabel(stats, fontsize=7)
         plt.tight_layout()
-        _save(fig, out_dir, "05_scaling_impact.png")
-        plt.close(fig)
+        if out_dir is not None:
+            _save(fig, out_dir, "05_scaling_impact.png")
+        return fig
 
 
 # ─── Figure 6: Train/test split ───────────────────────────────────────────────
@@ -324,8 +329,9 @@ def plot_train_test_split(df, X_train, X_test, y_train, y_test, out_dir):
         ax_bar.legend(fontsize=7)
 
         plt.tight_layout()
-        _save(fig, out_dir, "06_train_test_split.png")
-        plt.close(fig)
+        if out_dir is not None:
+            _save(fig, out_dir, "06_train_test_split.png")
+        return fig
 
 
 # ─── main ─────────────────────────────────────────────────────────────────────
@@ -379,17 +385,22 @@ def main():
     if args.no_save:
         out_dir = None  # suppress saving; plt.show() called at end instead
 
-    plot_raw_ohlcv(df_raw, out_dir or ".")
-    plot_technical_indicators(df, out_dir or ".")
-    plot_labeling(df, out_dir or ".")
-    plot_feature_distributions(X_raw, out_dir or ".")
-    plot_scaling_impact(X_raw, X_scaled, out_dir or ".")
-    plot_train_test_split(df, X_train, X_test, y_train, y_test, out_dir or ".")
+    figs = [
+        plot_raw_ohlcv(df_raw, out_dir or "."),
+        plot_technical_indicators(df, out_dir or "."),
+        plot_labeling(df, out_dir or "."),
+        *plot_feature_distributions(X_raw, out_dir or "."),
+        plot_scaling_impact(X_raw, X_scaled, out_dir or "."),
+        plot_train_test_split(df, X_train, X_test, y_train, y_test, out_dir or "."),
+    ]
 
     if args.no_save:
         plt.show()
     else:
         print(f"\nAll plots saved to: {out_dir}/")
+
+    for f in figs:
+        plt.close(f)
 
 
 if __name__ == "__main__":

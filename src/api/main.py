@@ -46,8 +46,8 @@ def load_resources(ticker: str = "AAPL") -> None:
             wrapper = ModelWrapper(name)
             wrapper.model = raw_model
             if name == "XGBoost":
-                wrapper._class_to_label = {0: -1, 1: 0, 2: 1}
-                wrapper._label_to_class = {-1: 0, 0: 1, 1: 2}
+                wrapper._class_to_label = ModelWrapper.XGB_CLASS_TO_LABEL
+                wrapper._label_to_class = ModelWrapper.XGB_LABEL_TO_CLASS
             models[name] = wrapper
 
     scaler_path = f"models/scaler_{ticker}.joblib"

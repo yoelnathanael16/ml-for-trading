@@ -1,3 +1,4 @@
+import logging
 import warnings
 
 import numpy as np
@@ -8,9 +9,15 @@ from sklearn.svm import SVC
 from statsmodels.tsa.arima.model import ARIMA
 from xgboost import XGBClassifier
 
+logger = logging.getLogger(__name__)
+
 
 class ModelWrapper:
     """Small adapter that gives each benchmark model the same train/predict API."""
+
+    # ponytail: single source of truth for XGBoost {-1,0,1}↔{0,1,2} remap
+    XGB_LABEL_TO_CLASS = {-1: 0, 0: 1, 1: 2}
+    XGB_CLASS_TO_LABEL = {0: -1, 1: 0, 2: 1}
 
     def __init__(self, model_name, random_state=42):
         self.model_name = model_name
@@ -75,8 +82,11 @@ class ModelWrapper:
 
     def predict_proba(self, X_test):
         if not hasattr(self.model, "predict_proba"):
-            n_samples = len(X_test)
-            return np.ones((n_samples, 3)) / 3.0
+            logger.warning(
+                "%s has no predict_proba — returning uniform priors; Kelly sizing will be unweighted",
+                self.model_name,
+            )
+            return np.ones((len(X_test), 3)) / 3.0
             
         probas_raw = self.model.predict_proba(X_test)
         n_samples = len(X_test)
@@ -141,7 +151,8 @@ def run_arima_benchmark(series, train_size, order=(1, 0, 1)):
                 model = ARIMA(history, order=order)
                 fitted = model.fit()
                 forecast = fitted.forecast(steps=1)[0]
-        except Exception:
+        except Exception as exc:
+            logger.warning("ARIMA fit failed: %s — using last observation as forecast", exc)
             forecast = history[-1] if history else 0.0
 
         forecasts.append(float(forecast))
