@@ -111,7 +111,28 @@ Dashboard interaktif ini menyajikan evaluasi model Machine Learning berdasarkan 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.header("Configuration Panel")
-ticker = st.sidebar.selectbox("Select Core Ticker", ["AAPL", "GOOGL", "MSFT", "TSLA"])
+
+PRESET_TICKERS = ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META"]
+
+preset_ticker = st.sidebar.selectbox("Select Core Ticker (preset)", PRESET_TICKERS)
+custom_ticker = st.sidebar.text_input(
+    "Or enter any ticker symbol",
+    value="",
+    placeholder="e.g. AMD, NFLX, SPY",
+    help="Type any symbol to analyze it dynamically. Overrides the preset above.",
+).strip().upper()
+
+ticker = custom_ticker or preset_ticker
+
+if not ticker:
+    st.warning("Masukkan simbol ticker yang valid untuk memulai analisis.")
+    st.stop()
+
+st.sidebar.caption(
+    "Untrained tickers download price data live. Model-dependent tabs "
+    "(Benchmarks, GMM, Simulator, Explainability) will prompt you to train "
+    "via the button in the Model Benchmarks tab."
+)
 
 _TODAY = datetime.now().strftime("%Y-%m-%d")
 
@@ -174,17 +195,19 @@ def render_mermaid(graph_def: str, height: int = 650) -> None:
     components.html(html, height=height, scrolling=True)
 
 
-def mermaid_png_btn(graph_def: str, fname: str = "pipeline.png") -> None:
-    # ponytail: external render via mermaid.ink; skip silently if offline
+@st.cache_data(show_spinner=False)
+def mermaid_to_image(graph_def: str) -> bytes | None:
+    # ponytail: external render via mermaid.ink; returns PNG bytes or None if offline
     encoded = base64.urlsafe_b64encode(graph_def.encode()).decode()
     try:
         resp = requests.get(
             f"https://mermaid.ink/img/{encoded}?bgColor=0f141c", timeout=10
         )
         if resp.status_code == 200:
-            st.download_button("💾 Download diagram PNG", resp.content, fname, "image/png")
+            return resp.content
     except Exception:
         pass
+    return None
 
 
 # ── Local-compute helpers ─────────────────────────────────────────────────────
@@ -555,11 +578,19 @@ with tab4:
     st.header("Multi-Asset Portfolio Allocation & Sizing")
     st.markdown("Optimalkan pembagian modal lintas aset berdasarkan teori portofolio modern.")
 
-    selected_tickers = st.multiselect(
+    preset_selected = st.multiselect(
         "Select Tickers for Portfolio",
-        ["AAPL", "GOOGL", "MSFT", "TSLA"],
+        PRESET_TICKERS,
         default=["AAPL", "MSFT", "GOOGL"],
     )
+    extra_raw = st.text_input(
+        "Add custom tickers (comma-separated)",
+        value="",
+        placeholder="e.g. AMD, NFLX, SPY",
+    )
+    extra_tickers = [t.strip().upper() for t in extra_raw.split(",") if t.strip()]
+
+    selected_tickers = list(dict.fromkeys([*preset_selected, *extra_tickers]))
 
     if len(selected_tickers) >= 2:
         if st.button("Optimize Weights"):
@@ -849,17 +880,55 @@ with tab9:
     if not diagrams:
         st.warning("No Mermaid diagrams found. Ensure `docs/pipeline.md` or `README.md` exists.")
     else:
-        selected_label = st.selectbox("Select diagram", diagram_labels)
-        idx = diagram_labels.index(selected_label)
-        graph_def = diagrams[idx].strip()
+        view_mode = st.radio(
+            "Diagram source",
+            ["Mermaid (live render)", "Generated visualizations (offline-safe)"],
+            horizontal=True,
+        )
 
-        render_mermaid(graph_def, height=700)
+        if view_mode == "Generated visualizations (offline-safe)":
+            _gen_dir = os.path.join("docs", "diagrams")
+            _gen_map = {
+                "Stage 1 — EDA: Raw Data Exploration": "eda_raw_data_exploration.png",
+                "Stage 2 — Feature Extraction (Technical Indicators)": "feature_extraction_indicators.png",
+                "Stages 3–6 — Preprocessing Pipeline": "preprocessing_pipeline.png",
+                "Stage 7 — Model Selection & Benchmarking": "model_selection_benchmarking.png",
+                "Full Pipeline Overview": "ml_pipeline_end_to_end.png",
+            }
+            gen_label = st.selectbox("Select visualization", list(_gen_map.keys()))
+            gen_path = os.path.join(_gen_dir, _gen_map[gen_label])
+            if os.path.exists(gen_path):
+                st.image(gen_path, use_container_width=True)
+                with open(gen_path, "rb") as f:
+                    st.download_button(
+                        "💾 Download PNG",
+                        f.read(),
+                        _gen_map[gen_label],
+                        "image/png",
+                        key=f"dl_gen_{gen_label}",
+                    )
+            else:
+                st.warning(f"Generated image not found: {gen_path}")
+        else:
+            selected_label = st.selectbox("Select diagram", diagram_labels)
+            idx = diagram_labels.index(selected_label)
+            graph_def = diagrams[idx].strip()
 
-        st.caption("Diagram rendered via mermaid.js. Use the button below to export as PNG.")
-        mermaid_png_btn(graph_def, fname=f"pipeline_diagram_{idx+1}.png")
+            png_bytes = mermaid_to_image(graph_def)
+            if png_bytes:
+                st.image(png_bytes, use_container_width=True)
+                st.download_button(
+                    "💾 Download diagram PNG",
+                    png_bytes,
+                    f"pipeline_diagram_{idx+1}.png",
+                    "image/png",
+                )
+            else:
+                st.caption("Image service unavailable; rendering via mermaid.js fallback.")
+                render_mermaid(graph_def, height=700)
 
-        with st.expander("View raw Mermaid source"):
-            st.code(graph_def, language="")
+            with st.expander("View raw Mermaid source"):
+                st.code(graph_def, language="")
 
 # ==========================================
 # TAB 10: EDA GALLERY

@@ -66,7 +66,11 @@ def load_resources(ticker: str = "AAPL") -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global orchestrator
-    orchestrator = QuantOrchestrator(tickers=["AAPL", "GOOGL", "MSFT", "TSLA"])
+    _env_tickers = os.environ.get("ORCH_TICKERS", "")
+    tickers = [t.strip().upper() for t in _env_tickers.split(",") if t.strip()] or [
+        "AAPL", "GOOGL", "MSFT", "TSLA",
+    ]
+    orchestrator = QuantOrchestrator(tickers=tickers)
     orchestrator.start()
     load_resources()  # keep existing load for /analyze backward compat
     yield
