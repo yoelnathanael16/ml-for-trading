@@ -41,6 +41,7 @@ from src.models.risk_model import TailRiskModel
 from src.models.anomaly_detector import MarketAnomalyDetector
 from src.models.mean_reversion import MeanReversionDetector
 from src.models.explainability import ModelExplainer
+from src.models.llm_explainer import explain as _llm_explain
 # ponytail: lazy import — keeps app loading even if scripts/ path is unusual
 def _load_eda_fns():
     from scripts.eda_preprocessing import (
@@ -51,6 +52,36 @@ def _load_eda_fns():
             plot_feature_distributions, plot_scaling_impact, plot_train_test_split)
 
 API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
+
+
+def _llm_key() -> str | None:
+    """Read DashScope API key from st.secrets or env (never hardcoded)."""
+    try:
+        return st.secrets["DASHSCOPE_API_KEY"]
+    except Exception:
+        return os.environ.get("DASHSCOPE_API_KEY")
+
+
+@st.cache_data(show_spinner=False)
+def llm_narrative(kind: str, facts_json: str) -> str | None:
+    """Call Qwen for a plain-language narrative; returns None if key absent or call fails."""
+    key = _llm_key()
+    if not key:
+        return None
+    import json
+    return _llm_explain(kind, json.loads(facts_json), key)
+
+
+def _llm_expander(kind: str, facts: dict) -> None:
+    """Render the AI explanation expander for the given kind/facts dict."""
+    import json
+    with st.expander("🧠 AI Explanation", expanded=False):
+        with st.spinner("Generating explanation…"):
+            narrative = llm_narrative(kind, json.dumps(facts, default=str))
+        if narrative:
+            st.markdown(narrative)
+        else:
+            st.caption("Set `DASHSCOPE_API_KEY` in `.streamlit/secrets.toml` (or env) to enable AI explanations.")
 
 
 def api_get(endpoint: str, params: dict = None) -> dict | None:
@@ -415,6 +446,12 @@ with tab1:
             _dl(fig, f"sharpe_ratio_{ticker}.png")
             plt.close(fig)
 
+        bench_facts = {
+            "ticker": ticker,
+            "table": results_df.to_dict(orient="index"),
+        }
+        _llm_expander("benchmark", bench_facts)
+
     else:
         st.warning(f"Hasil benchmarking untuk {ticker} belum tersedia.")
         if st.button("🚀 Train & Benchmark Models"):
@@ -745,6 +782,20 @@ with tab6:
     else:
         st.warning("Anomaly data unavailable.")
 
+    risk_facts = {
+        "ticker": ticker,
+        "garch_vol": vol_data.get("garch_vol") if vol_data else None,
+        "rolling_vol": vol_data.get("rolling_vol") if vol_data else None,
+        "cvar_95": risk_data.get("cvar_95") if risk_data else None,
+        "cvar_99": risk_data.get("cvar_99") if risk_data else None,
+        "var_95": risk_data.get("var_95") if risk_data else None,
+        "var_99": risk_data.get("var_99") if risk_data else None,
+        "position_scale": risk_data.get("position_scale") if risk_data else None,
+        "anomaly_flag": anomaly_data.get("anomaly_flag", False) if anomaly_data else False,
+        "anomaly_score": anomaly_data.get("anomaly_score", 0.0) if anomaly_data else 0.0,
+    }
+    _llm_expander("risk", risk_facts)
+
 # ==========================================
 # TAB 7: MEAN REVERSION
 # ==========================================
@@ -827,6 +878,13 @@ with tab8:
             top5 = pd.DataFrame(list(importances.items()), columns=["Feature", "Mean |SHAP|"])
             top5 = top5.nlargest(5, "Mean |SHAP|").reset_index(drop=True)
             st.dataframe(top5)
+
+            shap_facts = {
+                "model": model_choice,
+                "ticker": ticker,
+                "top_features": dict(top5.set_index("Feature")["Mean |SHAP|"]),
+            }
+            _llm_expander("shap", shap_facts)
         else:
             st.warning("No SHAP importance data available.")
     else:

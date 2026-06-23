@@ -8,6 +8,7 @@ Deploy the dynamic 10-tab dashboard to [Streamlit Community Cloud](https://share
 2. Go to **share.streamlit.io → New app**.
 3. Set **Main file path** to `src/ui/dashboard.py`.
 4. Click **Deploy** — `packages.txt` installs system deps automatically.
+5. *(Optional)* Add `DASHSCOPE_API_KEY` in **App Settings → Secrets** to enable AI (Qwen) explanations in Tabs 1, 6, and 8. See `.streamlit/secrets.toml.example`.
 
 All charts compute live from yfinance on demand. Heavy compute (Model Benchmarks / SHAP) is
 gated behind an explicit button so the app loads instantly on cold start.

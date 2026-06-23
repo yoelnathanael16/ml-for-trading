@@ -26,6 +26,7 @@ data/processed/
 
 # Environment Variables
 .env
+.streamlit/secrets.toml
 
 # AI & Agent related
 .agents/
