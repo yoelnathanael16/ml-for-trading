@@ -539,7 +539,11 @@ with tab3:
             trailing_stop = st.slider("Trailing Stop (%)", 0.0, 5.0, 2.0, step=0.1) / 100.0
             target_vol = st.slider("Volatility Target (for Vol Sizing, %)", 0.5, 3.0, 1.5, step=0.1) / 100.0
 
-        scaler = joblib.load(f"models/scaler_{ticker}.joblib")
+        scaler_path = f"models/scaler_{ticker}.joblib"
+        if not os.path.exists(scaler_path):
+            st.warning(f"Scaler for **{ticker}** not found. Re-train in Tab 1.")
+            st.stop()
+        scaler = joblib.load(scaler_path)
         df_feat = add_technical_indicators(df_core)
         df_feat["Label"] = 0  # dummy label for feature prep
         X, y, _ = prepare_features_and_labels(df_feat)
@@ -746,7 +750,7 @@ with tab6:
             roll = vol_data.get("rolling_vol")
             st.metric("GARCH Forecast Vol (Annualized)", f"{garch*100:.2f}%" if garch is not None else "N/A")
             st.metric("Rolling 20d Vol (Annualized)", f"{roll*100:.2f}%" if roll is not None else "N/A")
-            if garch and roll and garch > 0 and roll > 0:
+            if garch is not None and roll is not None and garch > 0 and roll > 0:
                 if garch > roll * 1.1:
                     st.warning("GARCH forecasts HIGHER volatility — consider reducing size.")
                 elif garch < roll * 0.9:
