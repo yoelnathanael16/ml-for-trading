@@ -9,7 +9,7 @@ from src.models.market_regime import MarketRegimeDetector
 from src.models.backtester import run_advanced_backtest
 from sklearn.metrics import accuracy_score
 
-def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str = "data", models_dir: str = "models") -> dict:
+def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str = "data", models_dir: str = "models", reporter=None) -> dict:
     """
     Run the full ML benchmarking pipeline with configurable directory paths.
 
@@ -28,12 +28,18 @@ def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str
             - model_wrappers: Dict of trained ModelWrapper objects
             - scaler: Fitted scaler object
     """
+    if reporter:
+        reporter.start()
+
     # 1. Load Data
     raw_path = f"{data_dir}/raw/{ticker}_{start_date}_{end_date}.parquet"
     print(f"Loading data from {raw_path}...")
     if not os.path.exists(raw_path):
         print(f"Data not found at {raw_path}. Please run data ingestion first.")
         return None
+
+    if reporter:
+        reporter.advance("Preprocessing data...", "preprocess")
 
     df = pd.read_parquet(raw_path)
 
@@ -51,6 +57,8 @@ def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str
 
     # 6. Fit Market Regime Detector (on all historical indicators)
     print("Training Market Regime Detector (GMM)...")
+    if reporter:
+        reporter.advance("Training Market Regime Detector (GMM)...", "gmm")
     regime_features = df[['Log_Returns', 'Volatility']].dropna()
     regime_detector = MarketRegimeDetector(n_regimes=3)
     regime_detector.fit(regime_features)
@@ -70,8 +78,15 @@ def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str
     test_sma_50 = df.loc[X_test.index, 'SMA_50'].values
     test_trend = test_prices.values > test_sma_50
 
+    _model_stage_key = {
+        "SVM": "svm", "RandomForest": "randomforest",
+        "XGBoost": "xgboost", "LightGBM": "lightgbm",
+    }
+
     for model_name in models:
         print(f"Training {model_name}...")
+        if reporter:
+            reporter.advance(f"Training {model_name}...", _model_stage_key[model_name])
         wrapper = ModelWrapper(model_name)
         wrapper.train(X_train, y_train)
         preds = wrapper.predict(X_test)
@@ -115,10 +130,17 @@ def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str
 
     # ARIMA Special Handling
     print("Running ARIMA Benchmark (This may take a while)...")
+    if reporter:
+        reporter.advance("Running ARIMA Benchmark...", "arima")
     # For ARIMA, we use log returns of the close price
     log_returns = np.log(df['Close'] / df['Close'].shift(1)).dropna()
     train_size = int(len(log_returns) * 0.8)
-    arima_preds_raw = run_arima_benchmark(log_returns.values, train_size)
+
+    def _arima_cb(i, total):
+        if reporter:
+            reporter.sub("Running ARIMA Benchmark...", "arima", i / total)
+
+    arima_preds_raw = run_arima_benchmark(log_returns.values, train_size, progress_cb=_arima_cb)
 
     # Convert ARIMA forecast to signals (1 if pos return, -1 if neg)
     arima_signals = np.where(arima_preds_raw > 0, 1, -1)
@@ -166,6 +188,8 @@ def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str
 
     # Save scaler for API usage
     joblib.dump(scaler, f"{models_dir}/scaler_{ticker}.joblib")
+    if reporter:
+        reporter.finish()
 
     # Return dict with results and supporting objects
     return {
@@ -177,7 +201,7 @@ def run_full_pipeline(ticker: str, start_date: str, end_date: str, data_dir: str
     }
 
 
-def run_benchmarking(ticker, start_date, end_date):
+def run_benchmarking(ticker, start_date, end_date, reporter=None):
     """
     Legacy function for backward compatibility. Calls run_full_pipeline() with default directories.
 
@@ -185,11 +209,12 @@ def run_benchmarking(ticker, start_date, end_date):
         ticker: Stock ticker symbol
         start_date: Start date for data (YYYY-MM-DD)
         end_date: End date for data (YYYY-MM-DD)
+        reporter: optional ProgressReporter for UI feedback
 
     Returns:
         DataFrame with benchmarking results
     """
-    result = run_full_pipeline(ticker, start_date, end_date, data_dir="data", models_dir="models")
+    result = run_full_pipeline(ticker, start_date, end_date, data_dir="data", models_dir="models", reporter=reporter)
     if result is None:
         return None
     return result["results_df"]
