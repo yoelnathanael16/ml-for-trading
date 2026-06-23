@@ -141,21 +141,16 @@ def calculate_financial_metrics(y_true, predictions, prices):
 def run_arima_benchmark(series, train_size, order=(1, 0, 1)):
     """Generate one-step-ahead ARIMA forecasts for the test portion of a series."""
     values = np.asarray(series, dtype=float)
-    history = list(values[:train_size])
     forecasts = []
-
-    for actual in values[train_size:]:
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                model = ARIMA(history, order=order)
-                fitted = model.fit()
-                forecast = fitted.forecast(steps=1)[0]
-        except Exception as exc:
-            logger.warning("ARIMA fit failed: %s — using last observation as forecast", exc)
-            forecast = history[-1] if history else 0.0
-
-        forecasts.append(float(forecast))
-        history.append(float(actual))
-
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # ponytail: fit once, then append(refit=False) — avoids O(n²) full refit per step
+            fitted = ARIMA(values[:train_size], order=order).fit()
+            for actual in values[train_size:]:
+                forecasts.append(float(fitted.forecast(steps=1)[0]))
+                fitted = fitted.append([actual], refit=False)
+    except Exception as exc:
+        logger.warning("ARIMA fit failed: %s — zero forecasts", exc)
+        forecasts = [0.0] * (len(values) - train_size)
     return np.asarray(forecasts)
