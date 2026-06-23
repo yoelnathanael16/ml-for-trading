@@ -138,19 +138,26 @@ def calculate_financial_metrics(y_true, predictions, prices):
     }
 
 
-def run_arima_benchmark(series, train_size, order=(1, 0, 1)):
-    """Generate one-step-ahead ARIMA forecasts for the test portion of a series."""
+def run_arima_benchmark(series, train_size, order=(1, 0, 1), progress_cb=None):
+    """Generate one-step-ahead ARIMA forecasts for the test portion of a series.
+
+    Args:
+        progress_cb: optional callable(i, total) for progress reporting.
+    """
     values = np.asarray(series, dtype=float)
     forecasts = []
+    test_len = len(values) - train_size
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             # ponytail: fit once, then append(refit=False) — avoids O(n²) full refit per step
             fitted = ARIMA(values[:train_size], order=order).fit()
-            for actual in values[train_size:]:
+            for i, actual in enumerate(values[train_size:]):
                 forecasts.append(float(fitted.forecast(steps=1)[0]))
                 fitted = fitted.append([actual], refit=False)
+                if progress_cb:
+                    progress_cb(i + 1, test_len)
     except Exception as exc:
         logger.warning("ARIMA fit failed: %s — zero forecasts", exc)
-        forecasts = [0.0] * (len(values) - train_size)
+        forecasts = [0.0] * test_len
     return np.asarray(forecasts)

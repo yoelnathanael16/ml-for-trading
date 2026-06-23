@@ -218,10 +218,15 @@ def _dl(fig, fname: str) -> None:
 
 def render_mermaid(graph_def: str, height: int = 650) -> None:
     safe = graph_def.replace("`", "&#96;")
+    # ponytail: startOnLoad:false + explicit mermaid.run() — startOnLoad misses DOMContentLoaded in components.html iframes
     html = (
         '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>'
-        '<script>mermaid.initialize({startOnLoad:true,theme:"dark"});</script>'
-        f'<div class="mermaid">\n{safe}\n</div>'
+        '<div class="mermaid" id="mmd-graph">\n' + safe + '\n</div>'
+        '<script>'
+        'mermaid.initialize({startOnLoad:false,theme:"dark",'
+        'flowchart:{useMaxWidth:true,htmlLabels:true}});'
+        'mermaid.run({nodes:[document.getElementById("mmd-graph")]});'
+        '</script>'
     )
     components.html(html, height=height, scrolling=True)
 
@@ -455,14 +460,21 @@ with tab1:
     else:
         st.warning(f"Hasil benchmarking untuk {ticker} belum tersedia.")
         if st.button("🚀 Train & Benchmark Models"):
-            with st.spinner("Melatih model... (beberapa menit untuk ARIMA)"):
-                try:
-                    from src.train_benchmark import run_benchmarking
-                    run_benchmarking(ticker, "2020-01-01", _TODAY)
-                    st.success("Pelatihan selesai!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Terjadi kesalahan: {e}")
+            from src.train_benchmark import run_benchmarking
+            from src.training.progress import ProgressReporter, fmt_eta
+            prog = st.progress(0.0, text="Memulai pelatihan...")
+
+            def _sink(label, frac, eta):
+                prog.progress(min(frac, 1.0), text=f"{label} — sisa ~{fmt_eta(eta)}")
+
+            reporter = ProgressReporter(ticker, on_update=_sink)
+            try:
+                run_benchmarking(ticker, "2020-01-01", _TODAY, reporter=reporter)
+                prog.progress(1.0, text="Selesai!")
+                st.success("Pelatihan selesai!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Terjadi kesalahan: {e}")
 
 # ==========================================
 # TAB 2: MARKET REGIMES (GMM)

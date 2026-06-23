@@ -8,71 +8,69 @@ End-to-end data flow from raw OHLCV ingestion through preprocessing, training, o
 
 ```mermaid
 flowchart TD
-    subgraph INGEST["① Data Ingestion — src/data_ingestion.py"]
+    subgraph INGEST["① Data Ingestion"]
         YF["yfinance.download(ticker, start, end)"] --> RAW
-        SYN["_build_synthetic_ohlcv()\ndeterministic fallback for offline tests"] -.-> RAW
-        RAW[("data/raw/\n{ticker}_{start}_{end}.parquet\n~1 500 trading rows / 6 years")]
+        SYN["_build_synthetic_ohlcv()\noffline deterministic fallback"] -.-> RAW
+        RAW[("data/raw/{ticker}_{start}_{end}.parquet")]
     end
 
-    subgraph PREP["② Feature Engineering — src/features/"]
-        RAW --> TI["add_technical_indicators()\n────────────────────────────\nSMA_20, SMA_50\nRSI  (14-period Wilder EMA)\nMACD / Signal / Histogram\nBollinger Bands (20-period, 2σ)\nMomentum (10-day diff)\nLog_Returns = log(Cₜ / Cₜ₋₁)\nVolatility = rolling(20).std(Log_Returns)\n→ dropna() removes warm-up rows"]
-        TI --> LBL["triple_barrier_labeling()\n────────────────────────────\nLabel ∈ {+1 profit-take, −1 stop-loss, 0 time}\nvertical_barrier=5d · profit=2% · stop=1%"]
-        LBL --> PREP2["prepare_features_and_labels()\n────────────────────────────\ndrop NaN labels\ndrop OHLCV columns\nRobustScaler.fit_transform(X_train)"]
-        PREP2 --> SPLIT["walk_forward_split()\n────────────────────────────\nchronological 80% train / 20% test\nno data leakage, no shuffling"]
+    subgraph PREP["② Feature Engineering"]
+        RAW --> TI["add_technical_indicators()\nSMA_20/50 · RSI · MACD · BB\nMomentum · Log_Returns · Volatility"]
+        TI --> LBL["triple_barrier_labeling()\nLabel ∈ {+1, −1, 0}\nbarrier=5d · profit=2% · stop=1%"]
+        LBL --> PREP2["prepare_features_and_labels()\ndrop NaN & OHLCV · RobustScaler"]
+        PREP2 --> SPLIT["walk_forward_split()\n80% train / 20% test · chronological"]
     end
 
-    subgraph TUNE["③ Hyperparameter Tuning — src/training/hyperparameter_tuner.py"]
-        SPLIT --> HT["tune_all_models()\n────────────────────────────\nTimeSeriesSplit(n_splits=5)\nGridSearchCV(scoring='accuracy')\nfilters single-class folds automatically\nSVM · RF · XGB · LGBM"]
+    subgraph TUNE["③ Hyperparameter Tuning"]
+        SPLIT --> HT["tune_all_models()\nGridSearchCV · TimeSeriesSplit(5)\nSVM · RF · XGB · LGBM"]
         HT --> BESTPARAMS["best_params per model"]
     end
 
-    subgraph TRAIN_CORE["④ Benchmark Training — src/train_benchmark.py"]
-        SPLIT --> ML["SVM  · RandomForest\nXGBoost  · LightGBM\nfit with tuned hyperparams"]
+    subgraph TRAIN_CORE["④ Benchmark Training"]
+        SPLIT --> ML["SVM · RandomForest\nXGBoost · LightGBM"]
         TI --> ARIMA["ARIMA(1,0,1)\nwalk-forward Log_Returns forecast"]
-        TI --> GMM["MarketRegimeDetector\nGaussianMixture(n_components=3)\nfit on [Log_Returns, Volatility]\norder by mean volatility → Low/Mid/High"]
-        ML --> BT["run_advanced_backtest()\n────────────────────────────\nstate machine: Open → SL/PT/Trailing/Time\nsize: Kelly · Constant · Volatility-adj\nSMA-50 trend filter"]
+        TI --> GMM["MarketRegimeDetector\nGMM(n=3) on Log_Returns · Volatility"]
+        ML --> BT["run_advanced_backtest()\nKelly/Vol sizing · SL/PT/TS · SMA-50"]
         ARIMA --> BT
-        BT --> METRICS["Accuracy · Sharpe · Max Drawdown\nCVaR · Total Return\n→ data/processed/{t}_benchmarking_results.csv"]
+        BT --> METRICS["Accuracy · Sharpe · MaxDD · Return\n→ data/processed/{t}_benchmarking_results.csv"]
     end
 
-    subgraph TRAIN_ADV["⑤ Advanced Models — QuantOrchestrator.weekly_retrain()"]
-        TI --> HMM["HMMRegimeDetector\nGaussianHMM(n_components=3, cov='diag')\nfit on [Log_Returns, Volatility]\norder states by mean return → Bull/Sideways/Bear\n→ get_transition_matrix()"]
-        TI --> GARCH["GARCHVolatilityModel\narch.arch_model(returns×100, vol='Garch', p=1, q=1)\nforecast(1) → annualized vol\n→ garch_{t}.joblib"]
-        TI --> ANOM["MarketAnomalyDetector\nIsolationForest(contamination=0.05)\nfit on full 12-feature matrix\n→ anomaly_detector_{t}.joblib"]
-        TI --> MR["MeanReversionDetector\nZ-score = (Cₜ − μ₂₀) / σ₂₀\nOU half-life via OLS: ΔPₜ = a + b·Pₜ₋₁\nhalf-life = −log(2)/b\n→ mean_reversion_{t}.joblib"]
-        TI --> RISK["TailRiskModel\nHistorical CVaR: E[r | r ≤ VaR_α]\nVaR = −quantile(returns, 1−α)\nposition_scale = target_cvar / realized_cvar\n→ risk_model_{t}.joblib"]
-        ML --> SHAP["ModelExplainer\nRF/XGB/LGBM → TreeExplainer\nSVM → KernelExplainer (kmeans background)\nprecomputed as {feature: mean_abs_shap}\n→ explainer_{model}_{t}.joblib ×4"]
+    subgraph TRAIN_ADV["⑤ Advanced Models (weekly_retrain)"]
+        TI --> HMM["HMMRegimeDetector\nGaussianHMM(n=3) → Bull/Sideways/Bear"]
+        TI --> GARCH["GARCHVolatilityModel\nGARCH(1,1) annualized vol forecast"]
+        TI --> ANOM["MarketAnomalyDetector\nIsolationForest(contamination=0.05)"]
+        TI --> MR["MeanReversionDetector\nZ-score · OU half-life via OLS"]
+        TI --> RISK["TailRiskModel\nHistorical CVaR/VaR 95%/99%"]
+        ML --> SHAP["ModelExplainer\nTreeSHAP (RF/XGB/LGBM) · KernelSHAP (SVM)"]
     end
 
-    subgraph ARTIFACTS["⑥ Artifact Store — models/  (15 per ticker × 4 tickers = 60 total)"]
+    subgraph ARTIFACTS["⑥ Artifact Store — models/  (15 per ticker)"]
         direction LR
         FA["scaler_{t}"] --- FB["regime_detector_{t}"] --- FC["hmm_regime_{t}"]
         FD["garch_{t}"] --- FE["anomaly_detector_{t}"] --- FF["mean_reversion_{t}"]
         FG["risk_model_{t}"] --- FH["{SVM|RF|XGB|LGB}_{t}"] --- FI["explainer_{model}_{t} ×4"]
     end
 
-    subgraph SERVE["⑦ Serving — two independent paths"]
+    subgraph SERVE["⑦ Serving"]
         subgraph API_PATH["FastAPI  (src/api/main.py)"]
             direction TB
-            ORCH["QuantOrchestrator.infer(ticker)\n────────────────────\n1. check cache age (< 24h)\n2. daily_refresh() if stale\n3. return bundle dict"]
-            EP["/regime · /volatility · /risk\n/anomaly · /mean-reversion · /explain"]
-            ORCH --> EP
+            ORCH["QuantOrchestrator.infer(ticker)\ncache check → daily_refresh if stale"] --> EP["/regime · /volatility · /risk\n/anomaly · /mean-reversion · /explain"]
         end
         subgraph LOCAL_PATH["Standalone Streamlit (no API)"]
             direction TB
-            LH["@st.cache_data helpers\n────────────────────\ncompute_hmm_local()\ncompute_volatility_local()\ncompute_risk_local()\ncompute_anomaly_local()\ncompute_mean_reversion_local()\ncompute_explain_local()"]
+            LH["@st.cache_data helpers\ncompute_hmm/volatility/risk/anomaly/mr/explain_local()"]
         end
     end
 
     subgraph DASH["⑧ Dashboard — src/ui/dashboard.py (8 tabs)"]
-        T1["📊 Model Benchmarks\n benchmarking_results.csv"]
-        T2["📈 Market Regimes GMM\n regime_detector joblib"]
-        T3["⚙️ Trading Simulator\n in-process backtest"]
-        T4["💼 Portfolio Allocation\n yfinance live returns"]
-        T5["🔮 HMM Regime\n transition heatmap"]
-        T6["📉 Risk & Volatility\n GARCH · CVaR · anomaly"]
-        T7["🔄 Mean Reversion\n Z-score chart · half-life"]
-        T8["🔍 Explainability\n SHAP bar chart · top-5"]
+        T1["📊 Model Benchmarks"]
+        T2["📈 Market Regimes GMM"]
+        T3["⚙️ Trading Simulator"]
+        T4["💼 Portfolio Allocation"]
+        T5["🔮 HMM Regime"]
+        T6["📉 Risk & Volatility"]
+        T7["🔄 Mean Reversion"]
+        T8["🔍 Explainability"]
     end
 
     TRAIN_CORE --> ARTIFACTS
